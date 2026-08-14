@@ -25,6 +25,10 @@ class DownloadService {
     await FlutterDownloader.pause(taskId: taskId);
   }
 
+  Future<String?> resume(String taskId) async {
+    return await FlutterDownloader.resume(taskId: taskId);
+  }
+
   Future<void> cancel(String taskId) async {
     await FlutterDownloader.cancel(taskId: taskId);
   }
