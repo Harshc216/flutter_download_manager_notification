@@ -34,5 +34,19 @@ void main() {
       final vidName = FileValidator.getSanitizedFileName('https://example.com/trailer.mp4');
       expect(vidName, equals('trailer.mp4'));
     });
+    test('GitHub webpage URLs are detected correctly', () {
+      expect(
+        FileValidator.isWebpageUrl(
+          'https://github.com/Excelsior-Technologies-Community/flutter_download_manager',
+        ),
+        isTrue,
+      );
+      expect(
+        FileValidator.isWebpageUrl(
+          'https://raw.githubusercontent.com/flutter/website/main/src/assets/images/flutter-logo-sharing.png',
+        ),
+        isFalse,
+      );
+    });
   });
 }

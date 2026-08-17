@@ -71,6 +71,21 @@ class FileValidator {
     return _imageExtensions.contains(ext) || _videoExtensions.contains(ext);
   }
 
+  /// Returns true if the URL points to a web page (e.g. GitHub repository page) rather than a direct media file.
+  static bool isWebpageUrl(String url) {
+    final lower = url.toLowerCase().trim();
+    if (lower.contains('github.com/') &&
+        !lower.contains('/raw/') &&
+        !lower.contains('.png') &&
+        !lower.contains('.jpg') &&
+        !lower.contains('.jpeg') &&
+        !lower.contains('.mp4') &&
+        !lower.contains('.mkv')) {
+      return true;
+    }
+    return false;
+  }
+
   /// Returns true if the URL points to a zip or archive file format.
   static bool isZipOrArchive(String url) {
     final ext = getExtension(url);

@@ -23,6 +23,13 @@ class DownloadTaskUpdate {
   final int progress;
 }
 
+@pragma('vm:entry-point')
+void _downloadCallback(String id, int status, int progress) {
+  final SendPort? send = IsolateNameServer.lookupPortByName('downloader_send_port');
+  send?.send([id, status, progress]);
+}
+
+@pragma('vm:entry-point')
 class DownloadService {
   static const String _portName = 'downloader_send_port';
   final ReceivePort _port = ReceivePort();
@@ -30,11 +37,6 @@ class DownloadService {
       StreamController<DownloadTaskUpdate>.broadcast();
 
   Stream<DownloadTaskUpdate> get updates => _updateController.stream;
-
-  static void _downloadCallback(String id, int status, int progress) {
-    final SendPort? send = IsolateNameServer.lookupPortByName(_portName);
-    send?.send([id, status, progress]);
-  }
 
   Future<void> initialize() async {
     await FlutterDownloader.initialize(debug: false, ignoreSsl: true);
@@ -77,11 +79,18 @@ class DownloadService {
     required String url,
     String? fileName,
     bool openWithSystemApp = true,
+    bool saveInPublicStorage = false,
   }) async {
     final cleanUrl = url.trim();
 
     if (cleanUrl.isEmpty) {
       throw ArgumentError('Please enter a valid URL.');
+    }
+
+    if (FileValidator.isWebpageUrl(cleanUrl)) {
+      throw ArgumentError(
+        'GitHub repository page URLs cannot be downloaded as media files. Please enter a direct URL to a video (.mp4) or image (.png, .jpg) file.',
+      );
     }
 
     if (FileValidator.isZipOrArchive(cleanUrl)) {
@@ -100,7 +109,7 @@ class DownloadService {
         ? fileName.trim()
         : FileValidator.getSanitizedFileName(cleanUrl);
 
-    final mediaType = FileValidator.getMediaType(cleanUrl);
+    final mediaType = FileValidator.getMediaType(sanitizedFileName);
 
     Directory? directory;
     if (Platform.isAndroid) {
@@ -114,7 +123,7 @@ class DownloadService {
       fileName: sanitizedFileName,
       showNotification: true,
       openFileFromNotification: true,
-      saveInPublicStorage: true,
+      saveInPublicStorage: saveInPublicStorage,
     );
 
     if (taskId == null) {

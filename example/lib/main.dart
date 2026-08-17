@@ -38,22 +38,20 @@ class DownloadHomePage extends StatefulWidget {
 }
 
 class _DownloadHomePageState extends State<DownloadHomePage> {
-  final TextEditingController _urlController = TextEditingController();
+  static const String _defaultUrl =
+      'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4';
+
+  late final TextEditingController _urlController;
   final DownloadService _downloadService = DownloadService();
-  final List<DownloadItem> _items = [];
   StreamSubscription<DownloadTaskUpdate>? _updateSubscription;
+  final Map<String, DownloadItem> _activeDownloads = {};
 
   String? _errorMessage;
-
-  // Sample URLs for fast 1-tap testing
-  static const String _sampleImageUrl =
-      'https://raw.githubusercontent.com/flutter/website/main/src/assets/images/flutter-logo-sharing.png';
-  static const String _sampleVideoUrl =
-      'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4';
 
   @override
   void initState() {
     super.initState();
+    _urlController = TextEditingController(text: _defaultUrl);
     _initDownloader();
   }
 
@@ -62,14 +60,18 @@ class _DownloadHomePageState extends State<DownloadHomePage> {
     await _requestPermissions();
 
     _updateSubscription = _downloadService.updates.listen((update) {
-      if (!mounted) return;
-      setState(() {
-        final index = _items.indexWhere((item) => item.taskId == update.taskId);
-        if (index != -1) {
-          _items[index].status = update.status;
-          _items[index].progress = update.progress;
+      final item = _activeDownloads[update.taskId];
+      if (item != null) {
+        item.status = update.status;
+        item.progress = update.progress;
+
+        if (update.status == DownloadStatus.completed) {
+          _activeDownloads.remove(update.taskId);
+          if (mounted) {
+            _downloadService.openFile(item: item, context: context);
+          }
         }
-      });
+      }
     });
   }
 
@@ -138,13 +140,9 @@ class _DownloadHomePageState extends State<DownloadHomePage> {
     try {
       final item = await _downloadService.download(
         url: url,
-        openWithSystemApp: true,
       );
 
-      setState(() {
-        _items.insert(0, item);
-        _urlController.clear();
-      });
+      _activeDownloads[item.taskId] = item;
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -160,45 +158,6 @@ class _DownloadHomePageState extends State<DownloadHomePage> {
         _errorMessage = e.toString().replaceAll('ArgumentError: ', '');
       });
     }
-  }
-
-  Future<void> _pauseDownload(DownloadItem item) async {
-    await _downloadService.pause(item.taskId);
-    setState(() {
-      item.status = DownloadStatus.paused;
-    });
-  }
-
-  Future<void> _resumeDownload(DownloadItem item) async {
-    final newTaskId = await _downloadService.resume(item.taskId);
-    if (newTaskId != null) {
-      setState(() {
-        item.taskId = newTaskId;
-        item.status = DownloadStatus.downloading;
-      });
-    }
-  }
-
-  Future<void> _cancelDownload(DownloadItem item) async {
-    await _downloadService.cancel(item.taskId);
-    setState(() {
-      item.status = DownloadStatus.cancelled;
-    });
-  }
-
-  Future<void> _retryDownload(DownloadItem item) async {
-    final newTaskId = await _downloadService.retry(item.taskId);
-    if (newTaskId != null) {
-      setState(() {
-        item.taskId = newTaskId;
-        item.status = DownloadStatus.queued;
-        item.progress = 0;
-      });
-    }
-  }
-
-  Future<void> _openFile(DownloadItem item) async {
-    await _downloadService.openFile(item: item, context: context);
   }
 
   @override
@@ -303,37 +262,6 @@ class _DownloadHomePageState extends State<DownloadHomePage> {
                       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
                     ),
                   ),
-                  const SizedBox(height: 12),
-
-                  // Quick Test Chips
-                  Row(
-                    children: [
-                      const Text(
-                        'Quick Link:',
-                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(width: 8),
-                      ActionChip(
-                        avatar: const Icon(Icons.image_outlined, size: 16),
-                        label: const Text('Sample Image'),
-                        onPressed: () {
-                          _urlController.text = _sampleImageUrl;
-                          _clearError();
-                          setState(() {});
-                        },
-                      ),
-                      const SizedBox(width: 6),
-                      ActionChip(
-                        avatar: const Icon(Icons.video_library_outlined, size: 16),
-                        label: const Text('Sample Video'),
-                        onPressed: () {
-                          _urlController.text = _sampleVideoUrl;
-                          _clearError();
-                          setState(() {});
-                        },
-                      ),
-                    ],
-                  ),
                   const SizedBox(height: 16),
 
                   // Download Button
@@ -387,88 +315,6 @@ class _DownloadHomePageState extends State<DownloadHomePage> {
                 ],
               ),
             ),
-
-            const SizedBox(height: 16),
-
-            // Downloads List Header
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20.0),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    'Downloads (${_items.length})',
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  if (_items.isNotEmpty)
-                    TextButton.icon(
-                      onPressed: () {
-                        setState(() {
-                          _items.clear();
-                        });
-                      },
-                      icon: const Icon(Icons.delete_sweep_rounded, size: 18),
-                      label: const Text('Clear All'),
-                    ),
-                ],
-              ),
-            ),
-
-            // Downloads List
-            if (_items.isEmpty)
-              Padding(
-                padding: const EdgeInsets.all(40.0),
-                child: Column(
-                  children: [
-                    Icon(
-                      Icons.cloud_download_outlined,
-                      size: 72,
-                      color: Colors.grey.shade400,
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      'No media downloading',
-                      style: TextStyle(
-                        fontSize: 16,
-                        color: Colors.grey.shade600,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Paste an image or video URL above and tap Download to Gallery.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
-                    ),
-                  ],
-                ),
-              )
-            else
-              ListView.builder(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                itemCount: _items.length,
-                itemBuilder: (context, index) {
-                  final item = _items[index];
-                  return DownloadItemTile(
-                    item: item,
-                    onPause: () => _pauseDownload(item),
-                    onResume: () => _resumeDownload(item),
-                    onCancel: () => _cancelDownload(item),
-                    onRetry: () => _retryDownload(item),
-                    onOpen: () => _openFile(item),
-                    onToggleOpenMode: (useExternal) {
-                      setState(() {
-                        item.openWithSystemApp = useExternal;
-                      });
-                    },
-                  );
-                },
-              ),
-            const SizedBox(height: 24),
           ],
         ),
       ),

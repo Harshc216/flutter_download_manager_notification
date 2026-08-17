@@ -97,7 +97,7 @@ class _InAppImageViewerState extends State<InAppImageViewer> {
             if (_transformationController.value != Matrix4.identity()) {
               _resetZoom();
             } else {
-              _transformationController.value = Matrix4.identity()..scale(2.0, 2.0, 1.0);
+              _transformationController.value = Matrix4.diagonal3Values(2.0, 2.0, 1.0);
             }
           },
           child: InteractiveViewer(
