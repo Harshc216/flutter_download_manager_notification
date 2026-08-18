@@ -20,6 +20,11 @@ void main() {
       expect(FileValidator.isWebpageUrl('https://raw.githubusercontent.com/user/repo/main/image.png'), isFalse);
     });
 
+    test('Identifies Pinterest pin URLs as supported', () {
+      expect(FileValidator.isSupportedMediaUrl('https://pin.it/3XG5abc'), isTrue);
+      expect(FileValidator.isSupportedMediaUrl('https://www.pinterest.com/pin/1234567890/'), isTrue);
+    });
+
     test('Generates sanitized filenames', () {
       final name = FileValidator.getSanitizedFileName('https://example.com/photos/cat.png');
       expect(name, equals('cat.png'));

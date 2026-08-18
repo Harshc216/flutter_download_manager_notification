@@ -44,6 +44,8 @@ class _DownloadHomePageState extends State<DownloadHomePage> {
       'https://raw.githubusercontent.com/flutter/website/main/src/assets/images/docs/flutter-logo-sharing.png';
   static const String _sampleJpgUrl =
       'https://picsum.photos/id/10/800/600.jpg';
+  static const String _samplePinterestUrl =
+      'https://www.pinterest.com/pin/687376043152341490/';
 
   late final TextEditingController _urlController;
   final DownloadService _downloadService = DownloadService();
@@ -311,6 +313,17 @@ class _DownloadHomePageState extends State<DownloadHomePage> {
                               onPressed: () {
                                 setState(() {
                                   _urlController.text = _sampleJpgUrl;
+                                  _clearError();
+                                });
+                              },
+                            ),
+                            ActionChip(
+                              avatar: const Icon(Icons.push_pin, size: 16, color: Colors.redAccent),
+                              label: const Text('Pinterest Photo'),
+                              backgroundColor: Colors.white,
+                              onPressed: () {
+                                setState(() {
+                                  _urlController.text = _samplePinterestUrl;
                                   _clearError();
                                 });
                               },

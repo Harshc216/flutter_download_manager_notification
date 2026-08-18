@@ -4,11 +4,13 @@ import 'dart:isolate';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_downloader/flutter_downloader.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import '../models/download_item.dart';
 import '../models/download_status.dart';
 import '../utils/file_validator.dart';
+import '../utils/media_url_resolver.dart';
 import '../widgets/in_app_media_viewer.dart';
 
 class DownloadTaskUpdate {
@@ -36,6 +38,9 @@ class DownloadService {
   final StreamController<DownloadTaskUpdate> _updateController =
       StreamController<DownloadTaskUpdate>.broadcast();
 
+  final FlutterLocalNotificationsPlugin _notificationsPlugin =
+      FlutterLocalNotificationsPlugin();
+
   Stream<DownloadTaskUpdate> get updates => _updateController.stream;
 
   final Map<String, DownloadItem> _trackedItems = {};
@@ -45,6 +50,26 @@ class DownloadService {
 
     IsolateNameServer.removePortNameMapping(_portName);
     IsolateNameServer.registerPortWithName(_port.sendPort, _portName);
+
+    // Initialize local notifications for fallback download progress bar
+    const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const iosInit = DarwinInitializationSettings();
+    const initSettings = InitializationSettings(android: androidInit, iOS: iosInit);
+
+    try {
+      await _notificationsPlugin.initialize(
+        initSettings,
+        onDidReceiveNotificationResponse: (response) {
+          final payload = response.payload;
+          if (payload != null && _trackedItems.containsKey(payload)) {
+            final item = _trackedItems[payload];
+            if (item != null && item.isCompleted) {
+              // Notification tapped
+            }
+          }
+        },
+      );
+    } catch (_) {}
 
     _port.listen((dynamic data) {
       final String id = data[0] as String;
@@ -67,7 +92,7 @@ class DownloadService {
       if (status == DownloadStatus.failed) {
         final trackedItem = _trackedItems[id];
         if (trackedItem != null && trackedItem.savedDir != null) {
-          // Native downloader failed; trigger fallback HTTP downloader
+          // Native downloader failed; trigger fallback HTTP downloader with notification progress bar
           unawaited(
             _startFallbackDownload(
               taskId: id,
@@ -92,7 +117,8 @@ class DownloadService {
     FlutterDownloader.registerCallback(_downloadCallback);
   }
 
-  /// Downloads media (images/videos only). Rejects zip and unsupported formats.
+  /// Downloads media (images/videos only, including Pinterest photos).
+  /// Resolves page links (Pinterest, short URLs, web pages) into direct binary media URLs first.
   Future<DownloadItem> download({
     required String url,
     String? fileName,
@@ -117,17 +143,12 @@ class DownloadService {
       );
     }
 
-    if (!FileValidator.isSupportedMediaUrl(cleanUrl)) {
-      throw ArgumentError(
-        'Unsupported file format. Please provide a direct URL to an image (.jpg, .png, etc.) or video (.mp4, .mkv, etc.).',
-      );
-    }
+    // 1. Resolve Pinterest pin links or web pages to direct image/video binary URLs
+    final resolvedMedia = await MediaUrlResolver.resolveMediaUrl(cleanUrl);
 
-    final sanitizedFileName = fileName != null && fileName.trim().isNotEmpty
+    final finalFileName = fileName != null && fileName.trim().isNotEmpty
         ? fileName.trim()
-        : FileValidator.getSanitizedFileName(cleanUrl);
-
-    final mediaType = FileValidator.getMediaType(sanitizedFileName);
+        : resolvedMedia.fileName;
 
     Directory? directory;
     if (Platform.isAndroid) {
@@ -142,15 +163,16 @@ class DownloadService {
     String? taskId;
     try {
       taskId = await FlutterDownloader.enqueue(
-        url: cleanUrl,
+        url: resolvedMedia.resolvedUrl,
         savedDir: directory.path,
-        fileName: sanitizedFileName,
+        fileName: finalFileName,
         showNotification: true,
         openFileFromNotification: true,
         saveInPublicStorage: saveInPublicStorage,
         headers: {
           'User-Agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+          'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,video/*,*/*;q=0.8',
         },
       );
     } catch (_) {
@@ -162,8 +184,8 @@ class DownloadService {
     final item = DownloadItem(
       taskId: finalTaskId,
       url: cleanUrl,
-      fileName: sanitizedFileName,
-      mediaType: mediaType,
+      fileName: finalFileName,
+      mediaType: resolvedMedia.mediaType,
       savedDir: directory.path,
       status: DownloadStatus.queued,
       progress: 0,
@@ -177,9 +199,9 @@ class DownloadService {
       unawaited(
         _startFallbackDownload(
           taskId: finalTaskId,
-          url: cleanUrl,
+          url: resolvedMedia.resolvedUrl,
           savedDir: directory.path,
-          fileName: sanitizedFileName,
+          fileName: finalFileName,
         ),
       );
     }
@@ -193,6 +215,8 @@ class DownloadService {
     required String savedDir,
     required String fileName,
   }) async {
+    final notificationId = taskId.hashCode.abs() % 100000;
+
     try {
       _updateController.add(
         DownloadTaskUpdate(
@@ -202,13 +226,20 @@ class DownloadService {
         ),
       );
 
+      _showFallbackNotification(
+        notificationId: notificationId,
+        fileName: fileName,
+        progress: 5,
+        isCompleted: false,
+      );
+
       final client = HttpClient();
       client.badCertificateCallback = (cert, host, port) => true;
       client.connectionTimeout = const Duration(seconds: 30);
       final request = await client.getUrl(Uri.parse(url));
       request.headers.set(
         'User-Agent',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
       );
       final response = await request.close();
 
@@ -218,6 +249,7 @@ class DownloadService {
         final sink = file.openWrite();
         final contentLength = response.contentLength;
         int downloaded = 0;
+        int lastReportedProgress = -1;
 
         await for (final chunk in response) {
           downloaded += chunk.length;
@@ -225,13 +257,24 @@ class DownloadService {
           final progress = contentLength > 0
               ? ((downloaded / contentLength) * 100).clamp(0, 100).toInt()
               : 50;
-          _updateController.add(
-            DownloadTaskUpdate(
-              taskId: taskId,
-              status: DownloadStatus.downloading,
+
+          if (progress != lastReportedProgress) {
+            lastReportedProgress = progress;
+            _updateController.add(
+              DownloadTaskUpdate(
+                taskId: taskId,
+                status: DownloadStatus.downloading,
+                progress: progress,
+              ),
+            );
+
+            _showFallbackNotification(
+              notificationId: notificationId,
+              fileName: fileName,
               progress: progress,
-            ),
-          );
+              isCompleted: false,
+            );
+          }
         }
 
         await sink.flush();
@@ -247,6 +290,7 @@ class DownloadService {
               progress: 0,
             ),
           );
+          _cancelFallbackNotification(notificationId);
           return;
         }
 
@@ -264,6 +308,7 @@ class DownloadService {
               progress: 0,
             ),
           );
+          _cancelFallbackNotification(notificationId);
           return;
         }
 
@@ -274,6 +319,13 @@ class DownloadService {
             progress: 100,
           ),
         );
+
+        _showFallbackNotification(
+          notificationId: notificationId,
+          fileName: fileName,
+          progress: 100,
+          isCompleted: true,
+        );
       } else {
         _updateController.add(
           DownloadTaskUpdate(
@@ -282,6 +334,7 @@ class DownloadService {
             progress: 0,
           ),
         );
+        _cancelFallbackNotification(notificationId);
       }
     } catch (e) {
       _updateController.add(
@@ -291,7 +344,46 @@ class DownloadService {
           progress: 0,
         ),
       );
+      _cancelFallbackNotification(notificationId);
     }
+  }
+
+  void _showFallbackNotification({
+    required int notificationId,
+    required String fileName,
+    required int progress,
+    required bool isCompleted,
+  }) {
+    try {
+      final androidDetails = AndroidNotificationDetails(
+        'download_channel',
+        'Download Progress',
+        channelDescription: 'Shows progress bar for active file downloads',
+        importance: Importance.low,
+        priority: Priority.low,
+        onlyAlertOnce: true,
+        showProgress: !isCompleted,
+        maxProgress: 100,
+        progress: progress,
+        ongoing: !isCompleted,
+        autoCancel: isCompleted,
+      );
+
+      final notificationDetails = NotificationDetails(android: androidDetails);
+
+      _notificationsPlugin.show(
+        notificationId,
+        isCompleted ? 'Download Complete' : 'Downloading $fileName',
+        isCompleted ? fileName : '$progress%',
+        notificationDetails,
+      );
+    } catch (_) {}
+  }
+
+  void _cancelFallbackNotification(int notificationId) {
+    try {
+      _notificationsPlugin.cancel(notificationId);
+    } catch (_) {}
   }
 
   Future<void> pause(String taskId) async {
@@ -367,4 +459,3 @@ class DownloadService {
     _updateController.close();
   }
 }
-

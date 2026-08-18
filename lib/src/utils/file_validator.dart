@@ -48,10 +48,11 @@ class FileValidator {
       final path = uri.path;
       final lastDotIndex = path.lastIndexOf('.');
       if (lastDotIndex != -1 && lastDotIndex < path.length - 1) {
-        return path.substring(lastDotIndex + 1).toLowerCase();
+        final ext = path.substring(lastDotIndex + 1).toLowerCase();
+        // Remove trailing slashes or path segments if any
+        return ext.split('/').first;
       }
     } catch (_) {
-      // If URI parsing fails, fallback to string splitting
       final cleanPath = urlOrPath.split('?').first.split('#').first;
       final lastDotIndex = cleanPath.lastIndexOf('.');
       if (lastDotIndex != -1 && lastDotIndex < cleanPath.length - 1) {
@@ -61,17 +62,21 @@ class FileValidator {
     return '';
   }
 
-  /// Returns true if the URL points to a supported image or video file.
+  /// Returns true if the URL points to a supported image or video file or a resolvable Pinterest pin.
   static bool isSupportedMediaUrl(String url) {
+    final lower = url.toLowerCase().trim();
+    if (lower.contains('pinterest.') || lower.contains('pin.it')) {
+      return true;
+    }
+
     final ext = getExtension(url);
     if (ext.isEmpty) {
-      // If URL doesn't end with explicit extension, treat as potentially supported if not archive
       return !isZipOrArchive(url);
     }
     return _imageExtensions.contains(ext) || _videoExtensions.contains(ext);
   }
 
-  /// Returns true if the URL points to a web page (e.g. GitHub repository page) rather than a direct media file.
+  /// Returns true if the URL points to a web page (e.g. GitHub repository page) rather than a direct media file or resolvable media page.
   static bool isWebpageUrl(String url) {
     final lower = url.toLowerCase().trim();
     if (lower.contains('github.com/') &&
@@ -110,17 +115,24 @@ class FileValidator {
       final uri = Uri.parse(url);
       final pathSegments = uri.pathSegments.where((s) => s.isNotEmpty).toList();
       if (pathSegments.isNotEmpty) {
-        final lastSegment = Uri.decodeComponent(pathSegments.last);
+        var lastSegment = Uri.decodeComponent(pathSegments.last);
+        lastSegment = lastSegment.split('?').first.split('#').first;
         if (lastSegment.contains('.')) {
-          return lastSegment;
+          final ext = getExtension(lastSegment);
+          if (_imageExtensions.contains(ext) || _videoExtensions.contains(ext)) {
+            return lastSegment;
+          }
         }
       }
     } catch (_) {}
 
     final type = getMediaType(url);
-    final ext = type == MediaType.video ? 'mp4' : 'jpg';
+    final ext = getExtension(url);
+    final finalExt = ext.isNotEmpty && (_imageExtensions.contains(ext) || _videoExtensions.contains(ext))
+        ? ext
+        : (type == MediaType.video ? 'mp4' : 'jpg');
     final timestamp = DateTime.now().millisecondsSinceEpoch;
-    return '${defaultPrefix}_$timestamp.$ext';
+    return '${defaultPrefix}_$timestamp.$finalExt';
   }
 
   /// Returns the exact MIME type string for a given path or URL extension.
@@ -140,6 +152,8 @@ class FileValidator {
         return 'image/bmp';
       case 'svg':
         return 'image/svg+xml';
+      case 'heic':
+        return 'image/heic';
       case 'mp4':
         return 'video/mp4';
       case 'mkv':
@@ -154,9 +168,10 @@ class FileValidator {
         return 'video/3gpp';
       default:
         final type = getMediaType(pathOrUrl);
-        if (type == MediaType.image) return 'image/*';
-        if (type == MediaType.video) return 'video/*';
+        if (type == MediaType.image) return 'image/jpeg';
+        if (type == MediaType.video) return 'video/mp4';
         return '*/*';
     }
   }
 }
+
