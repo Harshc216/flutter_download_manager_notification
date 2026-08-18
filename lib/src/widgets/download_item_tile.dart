@@ -193,16 +193,16 @@ class DownloadItemTile extends StatelessWidget {
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.deepPurple,
                       foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                     ),
                     onPressed: onOpen,
                     icon: const Icon(
-                      Icons.photo_library_rounded,
-                      size: 20,
+                      Icons.play_circle_fill_rounded,
+                      size: 18,
                     ),
                     label: const Text(
-                      'Open in Gallery',
+                      'Open Media',
                       style: TextStyle(fontWeight: FontWeight.bold),
                     ),
                   ),

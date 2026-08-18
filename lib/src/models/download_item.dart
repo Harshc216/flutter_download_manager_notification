@@ -34,9 +34,15 @@ class DownloadItem {
     if (File(primaryPath).existsSync()) {
       return primaryPath;
     }
-    final publicDownloadPath = '/storage/emulated/0/Download/$fileName';
-    if (File(publicDownloadPath).existsSync()) {
-      return publicDownloadPath;
+    final candidatePaths = [
+      '/storage/emulated/0/Download/$fileName',
+      '/storage/emulated/0/Pictures/$fileName',
+      '/storage/emulated/0/Movies/$fileName',
+    ];
+    for (final path in candidatePaths) {
+      if (File(path).existsSync()) {
+        return path;
+      }
     }
     return primaryPath;
   }

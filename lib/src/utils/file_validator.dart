@@ -122,4 +122,41 @@ class FileValidator {
     final timestamp = DateTime.now().millisecondsSinceEpoch;
     return '${defaultPrefix}_$timestamp.$ext';
   }
+
+  /// Returns the exact MIME type string for a given path or URL extension.
+  static String getMimeType(String pathOrUrl) {
+    final ext = getExtension(pathOrUrl);
+    switch (ext) {
+      case 'jpg':
+      case 'jpeg':
+        return 'image/jpeg';
+      case 'png':
+        return 'image/png';
+      case 'gif':
+        return 'image/gif';
+      case 'webp':
+        return 'image/webp';
+      case 'bmp':
+        return 'image/bmp';
+      case 'svg':
+        return 'image/svg+xml';
+      case 'mp4':
+        return 'video/mp4';
+      case 'mkv':
+        return 'video/x-matroska';
+      case 'mov':
+        return 'video/quicktime';
+      case 'avi':
+        return 'video/x-msvideo';
+      case 'webm':
+        return 'video/webm';
+      case '3gp':
+        return 'video/3gpp';
+      default:
+        final type = getMediaType(pathOrUrl);
+        if (type == MediaType.image) return 'image/*';
+        if (type == MediaType.video) return 'video/*';
+        return '*/*';
+    }
+  }
 }

@@ -38,6 +38,8 @@ class DownloadService {
 
   Stream<DownloadTaskUpdate> get updates => _updateController.stream;
 
+  final Map<String, DownloadItem> _trackedItems = {};
+
   Future<void> initialize() async {
     await FlutterDownloader.initialize(debug: false, ignoreSsl: true);
 
@@ -60,6 +62,22 @@ class DownloadService {
         status = DownloadStatus.failed;
       } else if (rawStatus == DownloadTaskStatus.canceled) {
         status = DownloadStatus.cancelled;
+      }
+
+      if (status == DownloadStatus.failed) {
+        final trackedItem = _trackedItems[id];
+        if (trackedItem != null && trackedItem.savedDir != null) {
+          // Native downloader failed; trigger fallback HTTP downloader
+          unawaited(
+            _startFallbackDownload(
+              taskId: id,
+              url: trackedItem.url,
+              savedDir: trackedItem.savedDir!,
+              fileName: trackedItem.fileName,
+            ),
+          );
+          return;
+        }
       }
 
       _updateController.add(
@@ -117,21 +135,32 @@ class DownloadService {
     }
     directory ??= await getApplicationDocumentsDirectory();
 
-    final taskId = await FlutterDownloader.enqueue(
-      url: cleanUrl,
-      savedDir: directory.path,
-      fileName: sanitizedFileName,
-      showNotification: true,
-      openFileFromNotification: true,
-      saveInPublicStorage: saveInPublicStorage,
-    );
-
-    if (taskId == null) {
-      throw Exception('Failed to enqueue download task.');
+    if (!await directory.exists()) {
+      await directory.create(recursive: true);
     }
 
-    return DownloadItem(
-      taskId: taskId,
+    String? taskId;
+    try {
+      taskId = await FlutterDownloader.enqueue(
+        url: cleanUrl,
+        savedDir: directory.path,
+        fileName: sanitizedFileName,
+        showNotification: true,
+        openFileFromNotification: true,
+        saveInPublicStorage: saveInPublicStorage,
+        headers: {
+          'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        },
+      );
+    } catch (_) {
+      taskId = null;
+    }
+
+    final finalTaskId = taskId ?? 'fallback_${DateTime.now().millisecondsSinceEpoch}';
+
+    final item = DownloadItem(
+      taskId: finalTaskId,
       url: cleanUrl,
       fileName: sanitizedFileName,
       mediaType: mediaType,
@@ -140,6 +169,129 @@ class DownloadService {
       progress: 0,
       openWithSystemApp: openWithSystemApp,
     );
+
+    _trackedItems[finalTaskId] = item;
+
+    if (taskId == null) {
+      // Direct HTTP download fallback if enqueue failed or unavailable
+      unawaited(
+        _startFallbackDownload(
+          taskId: finalTaskId,
+          url: cleanUrl,
+          savedDir: directory.path,
+          fileName: sanitizedFileName,
+        ),
+      );
+    }
+
+    return item;
+  }
+
+  Future<void> _startFallbackDownload({
+    required String taskId,
+    required String url,
+    required String savedDir,
+    required String fileName,
+  }) async {
+    try {
+      _updateController.add(
+        DownloadTaskUpdate(
+          taskId: taskId,
+          status: DownloadStatus.downloading,
+          progress: 5,
+        ),
+      );
+
+      final client = HttpClient();
+      client.badCertificateCallback = (cert, host, port) => true;
+      client.connectionTimeout = const Duration(seconds: 30);
+      final request = await client.getUrl(Uri.parse(url));
+      request.headers.set(
+        'User-Agent',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      );
+      final response = await request.close();
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final filePath = '$savedDir/$fileName';
+        final file = File(filePath);
+        final sink = file.openWrite();
+        final contentLength = response.contentLength;
+        int downloaded = 0;
+
+        await for (final chunk in response) {
+          downloaded += chunk.length;
+          sink.add(chunk);
+          final progress = contentLength > 0
+              ? ((downloaded / contentLength) * 100).clamp(0, 100).toInt()
+              : 50;
+          _updateController.add(
+            DownloadTaskUpdate(
+              taskId: taskId,
+              status: DownloadStatus.downloading,
+              progress: progress,
+            ),
+          );
+        }
+
+        await sink.flush();
+        await sink.close();
+
+        // Validate file content (ensure not HTML webpage or empty file)
+        final bytes = await file.readAsBytes();
+        if (bytes.isEmpty) {
+          _updateController.add(
+            DownloadTaskUpdate(
+              taskId: taskId,
+              status: DownloadStatus.failed,
+              progress: 0,
+            ),
+          );
+          return;
+        }
+
+        final header = String.fromCharCodes(bytes.take(50));
+        final lowerHeader = header.toLowerCase();
+        if (lowerHeader.contains('<!doc') ||
+            lowerHeader.contains('<html') ||
+            lowerHeader.contains('{"error') ||
+            lowerHeader.contains('<?xml')) {
+          await file.delete();
+          _updateController.add(
+            DownloadTaskUpdate(
+              taskId: taskId,
+              status: DownloadStatus.failed,
+              progress: 0,
+            ),
+          );
+          return;
+        }
+
+        _updateController.add(
+          DownloadTaskUpdate(
+            taskId: taskId,
+            status: DownloadStatus.completed,
+            progress: 100,
+          ),
+        );
+      } else {
+        _updateController.add(
+          DownloadTaskUpdate(
+            taskId: taskId,
+            status: DownloadStatus.failed,
+            progress: 0,
+          ),
+        );
+      }
+    } catch (e) {
+      _updateController.add(
+        DownloadTaskUpdate(
+          taskId: taskId,
+          status: DownloadStatus.failed,
+          progress: 0,
+        ),
+      );
+    }
   }
 
   Future<void> pause(String taskId) async {
@@ -164,6 +316,7 @@ class DownloadService {
   Future<void> openFile({
     required DownloadItem item,
     required BuildContext context,
+    bool forceInAppViewer = false,
   }) async {
     final filePath = item.filePath;
     if (filePath == null || !File(filePath).existsSync()) {
@@ -178,36 +331,33 @@ class DownloadService {
       return;
     }
 
-    if (item.openWithSystemApp) {
-      try {
-        final result = await OpenFilex.open(filePath);
-        if (result.type != ResultType.done) {
-          if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  'No external app found to open this file (${result.message}). Opening in default in-app viewer...',
-                ),
-                backgroundColor: Colors.orangeAccent,
-                duration: const Duration(seconds: 3),
-              ),
-            );
-            InAppMediaViewer.open(context, item: item);
-          }
-        }
-      } catch (e) {
+    if (forceInAppViewer || !item.openWithSystemApp) {
+      InAppMediaViewer.open(context, item: item);
+      return;
+    }
+
+    final mimeType = FileValidator.getMimeType(filePath);
+
+    try {
+      final result = await OpenFilex.open(filePath, type: mimeType);
+      if (result.type != ResultType.done) {
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('System open error: $e. Opening in default in-app viewer...'),
-              backgroundColor: Colors.orangeAccent,
+              content: Text(
+                'Opening in in-app viewer (${result.message})...',
+              ),
+              backgroundColor: Colors.deepPurple,
+              duration: const Duration(seconds: 2),
             ),
           );
           InAppMediaViewer.open(context, item: item);
         }
       }
-    } else {
-      InAppMediaViewer.open(context, item: item);
+    } catch (e) {
+      if (context.mounted) {
+        InAppMediaViewer.open(context, item: item);
+      }
     }
   }
 

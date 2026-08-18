@@ -16,7 +16,7 @@ class DownloadManagerApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Media Downloader',
+      title: 'Media Downloader & Viewer',
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(
@@ -40,11 +40,15 @@ class DownloadHomePage extends StatefulWidget {
 class _DownloadHomePageState extends State<DownloadHomePage> {
   static const String _defaultUrl =
       'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4';
+  static const String _samplePngUrl =
+      'https://raw.githubusercontent.com/flutter/website/main/src/assets/images/docs/flutter-logo-sharing.png';
+  static const String _sampleJpgUrl =
+      'https://picsum.photos/id/10/800/600.jpg';
 
   late final TextEditingController _urlController;
   final DownloadService _downloadService = DownloadService();
   StreamSubscription<DownloadTaskUpdate>? _updateSubscription;
-  final Map<String, DownloadItem> _activeDownloads = {};
+  final Map<String, DownloadItem> _downloadsMap = {};
 
   String? _errorMessage;
 
@@ -60,17 +64,14 @@ class _DownloadHomePageState extends State<DownloadHomePage> {
     await _requestPermissions();
 
     _updateSubscription = _downloadService.updates.listen((update) {
-      final item = _activeDownloads[update.taskId];
-      if (item != null) {
-        item.status = update.status;
-        item.progress = update.progress;
-
-        if (update.status == DownloadStatus.completed) {
-          _activeDownloads.remove(update.taskId);
-          if (mounted) {
-            _downloadService.openFile(item: item, context: context);
+      if (mounted) {
+        setState(() {
+          final item = _downloadsMap[update.taskId];
+          if (item != null) {
+            item.status = update.status;
+            item.progress = update.progress;
           }
-        }
+        });
       }
     });
   }
@@ -79,6 +80,8 @@ class _DownloadHomePageState extends State<DownloadHomePage> {
     await [
       Permission.notification,
       Permission.storage,
+      Permission.photos,
+      Permission.videos,
     ].request();
   }
 
@@ -126,9 +129,9 @@ class _DownloadHomePageState extends State<DownloadHomePage> {
     }
   }
 
-  Future<void> _startDownload() async {
+  Future<void> _startDownload({String? targetUrl}) async {
     _clearError();
-    final url = _urlController.text.trim();
+    final url = (targetUrl ?? _urlController.text).trim();
 
     if (url.isEmpty) {
       setState(() {
@@ -140,14 +143,17 @@ class _DownloadHomePageState extends State<DownloadHomePage> {
     try {
       final item = await _downloadService.download(
         url: url,
+        saveInPublicStorage: false,
       );
 
-      _activeDownloads[item.taskId] = item;
+      setState(() {
+        _downloadsMap[item.taskId] = item;
+      });
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Downloading ${item.fileName} with notification...'),
+            content: Text('Downloading ${item.fileName}... Check list below.'),
             backgroundColor: Colors.green,
             duration: const Duration(seconds: 2),
           ),
@@ -162,15 +168,17 @@ class _DownloadHomePageState extends State<DownloadHomePage> {
 
   @override
   Widget build(BuildContext context) {
+    final downloadsList = _downloadsMap.values.toList().reversed.toList();
+
     return Scaffold(
-      backgroundColor: Colors.grey.shade50,
+      backgroundColor: Colors.grey.shade100,
       appBar: AppBar(
         title: const Row(
           children: [
-            Icon(Icons.photo_library_rounded, color: Colors.white),
+            Icon(Icons.video_library_rounded, color: Colors.white),
             SizedBox(width: 10),
             Text(
-              'Media Downloader',
+              'Media Downloader & Viewer',
               style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
             ),
           ],
@@ -178,12 +186,10 @@ class _DownloadHomePageState extends State<DownloadHomePage> {
         backgroundColor: Colors.deepPurple,
         elevation: 4,
       ),
-      body: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // Header Input Box
-            Container(
+      body: CustomScrollView(
+        slivers: [
+          SliverToBoxAdapter(
+            child: Container(
               decoration: BoxDecoration(
                 color: Colors.deepPurple.shade50,
                 borderRadius: const BorderRadius.only(
@@ -196,21 +202,21 @@ class _DownloadHomePageState extends State<DownloadHomePage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'Paste Image or Video Link',
+                    'Download Image or Video',
                     style: TextStyle(
-                      fontSize: 16,
+                      fontSize: 18,
                       fontWeight: FontWeight.bold,
                       color: Colors.deepPurple,
                     ),
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Paste a link below to download with live progress bar notification and save to Gallery.',
-                    style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                    'Enter a direct URL to an image (.png, .jpg) or video (.mp4) to save to local storage.',
+                    style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
                   ),
                   const SizedBox(height: 16),
 
-                  // URL Input TextField with Paste Button
+                  // URL Input TextField
                   TextField(
                     controller: _urlController,
                     onChanged: (_) => _clearError(),
@@ -262,6 +268,58 @@ class _DownloadHomePageState extends State<DownloadHomePage> {
                       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
                     ),
                   ),
+                  const SizedBox(height: 12),
+
+                  // Quick Sample Buttons
+                  Row(
+                    children: [
+                      const Text(
+                        'Quick Samples: ',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.deepPurple),
+                      ),
+                      Expanded(
+                        child: Wrap(
+                          spacing: 8,
+                          runSpacing: 6,
+                          children: [
+                            ActionChip(
+                              avatar: const Icon(Icons.movie, size: 16, color: Colors.deepPurple),
+                              label: const Text('Sample Video MP4'),
+                              backgroundColor: Colors.white,
+                              onPressed: () {
+                                setState(() {
+                                  _urlController.text = _defaultUrl;
+                                  _clearError();
+                                });
+                              },
+                            ),
+                            ActionChip(
+                              avatar: const Icon(Icons.image, size: 16, color: Colors.deepPurple),
+                              label: const Text('Sample PNG'),
+                              backgroundColor: Colors.white,
+                              onPressed: () {
+                                setState(() {
+                                  _urlController.text = _samplePngUrl;
+                                  _clearError();
+                                });
+                              },
+                            ),
+                            ActionChip(
+                              avatar: const Icon(Icons.photo, size: 16, color: Colors.deepPurple),
+                              label: const Text('Sample JPG'),
+                              backgroundColor: Colors.white,
+                              onPressed: () {
+                                setState(() {
+                                  _urlController.text = _sampleJpgUrl;
+                                  _clearError();
+                                });
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
                   const SizedBox(height: 16),
 
                   // Download Button
@@ -275,16 +333,16 @@ class _DownloadHomePageState extends State<DownloadHomePage> {
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                         elevation: 3,
                       ),
-                      onPressed: _startDownload,
+                      onPressed: () => _startDownload(),
                       icon: const Icon(Icons.download_rounded, size: 24),
                       label: const Text(
-                        'Download to Gallery',
+                        'Download to Local Storage',
                         style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                       ),
                     ),
                   ),
 
-                  // Validation Error Message Banner
+                  // Validation Error Banner
                   if (_errorMessage != null) ...[
                     const SizedBox(height: 14),
                     Container(
@@ -315,8 +373,86 @@ class _DownloadHomePageState extends State<DownloadHomePage> {
                 ],
               ),
             ),
-          ],
-        ),
+          ),
+
+          // Downloads List Title
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'Downloaded Media (${downloadsList.length})',
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  if (downloadsList.isNotEmpty)
+                    TextButton.icon(
+                      onPressed: () {
+                        setState(() {
+                          _downloadsMap.clear();
+                        });
+                      },
+                      icon: const Icon(Icons.delete_sweep_rounded, size: 18),
+                      label: const Text('Clear List'),
+                    ),
+                ],
+              ),
+            ),
+          ),
+
+          if (downloadsList.isEmpty)
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(32.0),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.download_for_offline_outlined, size: 64, color: Colors.grey.shade400),
+                      const SizedBox(height: 12),
+                      Text(
+                        'No active or past downloads',
+                        style: TextStyle(fontSize: 16, color: Colors.grey.shade600, fontWeight: FontWeight.w500),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Paste an image or video URL above and tap Download to get started.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 13, color: Colors.grey.shade500),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            )
+          else
+            SliverList(
+              delegate: SliverChildBuilderDelegate(
+                (context, index) {
+                  final item = downloadsList[index];
+                  return DownloadItemTile(
+                    item: item,
+                    onPause: () => _downloadService.pause(item.taskId),
+                    onResume: () => _downloadService.resume(item.taskId),
+                    onCancel: () => _downloadService.cancel(item.taskId),
+                    onRetry: () => _downloadService.retry(item.taskId),
+                    onOpen: () => _downloadService.openFile(item: item, context: context),
+                    onToggleOpenMode: (val) {
+                      setState(() {
+                        item.openWithSystemApp = val;
+                      });
+                    },
+                  );
+                },
+                childCount: downloadsList.length,
+              ),
+            ),
+        ],
       ),
     );
   }
